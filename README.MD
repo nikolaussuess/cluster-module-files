@@ -282,3 +282,5 @@ module purge
   If you attempt to load a virtual environment that was created with a different version of Python, a warning will be displayed, and the environment will use the original Python version rather than the one specified by the module.
 
 
+## Miniforge
+Documentation follows ... see directory `miniforge` for now ...
