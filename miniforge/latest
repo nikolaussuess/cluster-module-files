@@ -1,0 +1,195 @@
+#%Module
+
+# loosely based on https://github.com/NOAA-GSL/contrib_miniconda3/
+
+set name        "miniforge3"
+set version     "latest"
+set long_name   "${name} (${version})"
+set myuser      $::env(USER)
+set myhome      $::env(HOME)
+set env_dir     "/srv/environments/${myuser}/venvs"
+set install_dir "/opt/miniforge3"
+set shell       [module-info shelltype]
+set default_python_version "3.12.8"
+set env_name    "testenv"
+set env_mode    "temporary"
+
+if { ! [info exists env(PYTHON_VERSION)]} {
+    set python_version $default_python_version
+} else {
+    set python_version $::env(PYTHON_VERSION)
+}
+
+if { ! [info exists env(ENV_MODE)]} {
+    set env_mode "temporary"
+} else {
+    set env_mode "permanent"
+}
+
+if { ! [info exists env(ENV_PATH)] && $env_mode == "temporary" } {
+    set envs_dir "/srv/environments/${myuser}/venvs"
+    if { ! [info exists env(ENV_NAME)]} { 
+        # Make the SLURM job ID part of the environment name
+        if { [info exists env(SLURM_JOBID)]} { 
+            set slurm_jobid $::env(SLURM_JOBID)
+            set env_dir "${envs_dir}/job_${slurm_jobid}"
+        } else {
+            set env_dir "${envs_dir}/testenv"
+        }
+    } else {
+        set env_name [string trimright $::env(ENV_NAME) "/"]
+        set env_dir "${envs_dir}/${env_name}"
+    }
+    set env_name [file tail $env_dir]
+    #set tmp_list [ split $env_dir "/" ]
+    #set env_name [lindex $tmp_list [expr {[llength $tmp_list] - 1}]]
+    #unset tmp_list
+} elseif { ! [info exists env(ENV_PATH)] && $env_mode == "permanent" } {
+    set envs_dir "${myhome}/venvs"
+    if { ! [info exists env(ENV_NAME)]} { 
+        # Make the SLURM job ID part of the environment name
+        if { [info exists env(SLURM_JOBID)]} { 
+            set slurm_jobid $::env(SLURM_JOBID)
+            set env_dir "${envs_dir}/job_${slurm_jobid}"
+        } else {
+            set env_dir "${envs_dir}/testenv"
+        }
+        set env_name [ file tail $env_dir ]
+    } else {
+        set env_name $::env(ENV_NAME)
+        set env_dir "${envs_dir}/${env_name}"
+    }
+} else { ;# Exists ENV_PATH
+    puts stderr "Setting ENV_PATH is NOT supported, yet."
+    puts stderr "Please use ENV_NAME instead and do 'unset ENV_PATH'."
+    exit 1
+    # Not yet supported, because it requires an adaption of CONDA_ENVS_PATH.
+#    if { ! [info exists env(ENV_NAME)]} {
+#        set env_dir $::env(ENV_PATH)
+#        set tmp_list [ split $env_dir "/" ]
+#        set env_name [lindex $tmp_list [expr {[llength $tmp_list] - 1}]]
+#        unset tmp_list
+#    } else { ;# Exists ENV_PATH AND ENV_NAME
+#        set env_name $::env(ENV_NAME)
+#        # Remove trailing / of path
+#        set env_dir [string trimright $::env(ENV_PATH) "/"]
+#        set env_dir "${env_dir}/${env_name}"
+#    }
+}
+
+proc ModulesHelp { } {
+    upvar long_name long_name
+    upvar python_version python_version
+    puts stderr "This module loads or installs ${long_name}."
+    puts stderr "Default Python version: Python ${python_version}\n"
+    puts stderr "- You can set a different python version with e.g."
+    puts stderr "     export PYTHON_VERSION=3.6"
+    puts stderr "- You can set a different name for the environment"
+    puts stderr "  by setting the ENV_NAME environment variable, .e.g."
+    puts stderr "     export ENV_NAME=mynewenv"
+    puts stderr "  Default is testenv. You SHOULD override it if you"
+    puts stderr "  want to execute multiple jobs with multiple "
+    puts stderr "  (temporary) environments at the same time on the same node."
+    puts stderr "- If you want to use the same (temporary) environment for"
+    puts stderr "  multiple jobs, you could also set the environment variable"
+    puts stderr "     export KEEP_EXISTING=1 # not recommended"
+}
+
+module-whatis "load ${long_name} with a temporary or permanent environment\n"
+
+conflict miniconda miniconda-permanent python
+
+if { ! [file exists ${install_dir}] } {
+    puts stderr "Installation not found!"
+    exit 1
+}
+
+if { [module-info mode load] } {
+
+    # Temporary environments should be deleted unless KEEP_EXISTING=1
+    if {$env_mode == "temporary" && (![info exists env(KEEP_EXISTING)] || $::env(KEEP_EXISTING) == 0)} {
+        #puts stderr "Deleting environment ${env_dir} if it exists ..."
+        file delete -force ${env_dir}
+    } 
+    
+    #puts stderr "Updating installation."
+    #exec ${install_dir}/bin/conda update -y -n base -c conda-forge conda
+    
+    setenv CONDA_SHLVL "1"
+    
+    if {! [file exists ${env_dir}]} {
+        puts stderr "Create NEW environment at ${env_dir}."
+        file mkdir "${env_dir}"
+        exec ${install_dir}/bin/conda create -y -p "${env_dir}" "python==${python_version}"
+    }
+    
+    # Add local conda cache
+    #catch {exec ${install_dir}/bin/conda config --add channels file:///opt/conda-cache}
+    # Copying can fail if multiple jobs start at the same time and try to copy this file at the same time.
+    catch {file copy -force ${install_dir}/.condarc ${env_dir}/.condarc}
+    #file copy -force ${install_dir}/.condarc ${env_dir}/.condarc
+    
+    setenv CONDA_SHLVL "2"
+    
+    #puts stderr "IMPORTANT: Due to an update of the license terms by Anaconda, Inc., ONLY free repositories may be used. These are for example 'conda-forge', but NOT e.g. 'anaconda' or 'pkg/main'. Non-free repositories may only be used here if a (paid) license has been purchased."
+
+    # IS NOT CALLED!!! Otherwise, deactivating does not work ...
+    #puts "source ${install_dir}/etc/profile.d/${conda_file};"
+}
+
+
+
+if { [ module-info mode remove ] } {
+    puts stderr "Unloading and deleting ${long_name}\n"
+    # Delete if $env_mode == "temporary" AND NOT KEEP_EXISTING=1
+    set tmp_ke [expr { [info exists env(KEEP_EXISTING)] ? $env(KEEP_EXISTING) : 0 }]
+    set delete_dir [expr { $env_mode == "temporary" && !$tmp_ke && [file exists ${env_dir}] }]
+    if { $delete_dir } {
+        file delete -force ${env_dir}
+    }
+    
+    if {$shell == "csh"} {
+        puts "unalias conda;"
+    } else {
+        puts "unset conda;"
+    }
+    
+    if { [file exists "${myhome}/.conda/environments.txt"] && $delete_dir } {
+        puts stderr "Deleting the conda environment from the configuration files."
+        puts stderr "Environment: ${env_name} (${env_dir})"
+        #exec sed -i "\\#${install_dir}#d" "${myhome}/.conda/environments.txt"
+        exec sed -i "\\#${env_dir}#d" "${myhome}/.conda/environments.txt"
+        
+        if { [file size "${myhome}/.conda/environments.txt"] == 0 } {
+            file delete "${myhome}/.conda/environments.txt"
+        }
+        set contents [glob -nocomplain -dir "${myhome}/.conda" *]
+        if { [llength $contents] == 0 } {
+            file delete "${myhome}/.conda"
+        } else {
+            puts stderr "Not deleting directory ${myhome}/.conda because it is not empty."
+            puts stderr "You might consider to delete it by hand with"
+            puts stderr "     rm -r ${myhome}/.conda"
+        }
+    }
+        
+    if { [file exists "${myhome}/.cache/conda"] && $delete_dir } {
+        file delete -force "${myhome}/.cache/conda"
+    }
+}
+
+prepend-path PATH "${env_dir}/bin:${install_dir}/bin:${install_dir}/condabin"
+prepend-path LD_LIBRARY_PATH ${install_dir}/lib
+prepend-path CONDA_ENVS_PATH "${envs_dir}:${install_dir}/envs"
+prepend-path CONDA_PKGS_PATH ${install_dir}/pkgs
+
+setenv CONDA_PREFIX "${env_dir}"
+setenv CONDA_PREFIX_1 "${install_dir}"
+setenv CONDA_DEFAULT_ENV "${env_name}"
+setenv CONDA_PROMPT_MODIFIER "(module conda)"
+setenv CONDA_EXE "${install_dir}/bin/conda"
+setenv _CE_M ""
+setenv _CE_CONDA ""
+setenv CONDA_PYTHON_EXE "${install_dir}/bin/python"
+setenv ENV_NAME "${env_name}"
+

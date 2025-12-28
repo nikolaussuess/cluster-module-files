@@ -1,0 +1,181 @@
+#%Module
+
+set name        "python"
+set version     "3.7.17"
+set long_name   "${name} (${version})"
+set myuser      $::env(USER)
+set myhome      $::env(HOME)
+set env_dir     "/srv/environments/${myuser}/venvs"
+set install_dir "/opt/${name}/${version}"
+set shell       [module-info shelltype]
+set default_python_version "3.7.17"
+set env_name    "testenv"
+set env_mode    "temporary"
+
+proc ModulesHelp { } {
+    upvar long_name long_name
+    upvar default_python_version python_version
+    puts stderr "This module loads ${long_name}."
+    puts stderr "Python version: Python ${python_version}\n"
+}
+
+module-whatis "load ${long_name}\n"
+
+conflict miniconda miniconda-permanent miniforge
+
+# The environment variable PYTHON_VERSION is not supported here but only with
+# module load miniforge
+# We raise an error if the version specified by this environment variable
+# does not match the current version here.
+if { [info exists env(PYTHON_VERSION)] && $::env(PYTHON_VERSION) != "${default_python_version}"} {
+    puts stderr "\[${long_name}\] The environment variable PYTHON_VERSION is not supported with module python."
+    puts stderr "\[${long_name}\] You MUST NOT set it to a different python version than you are loading."
+    exit 1
+}
+
+# Default ENV_MODE is temporary.
+# But we support
+# - temporary (default) - store to /srv/environments/$USER/venvs
+# - permanent           - store to $HOME/venvs
+# - none                - do not load or create any venv
+if { ! [info exists env(ENV_MODE)]} {
+    set env_mode "temporary"
+} else {
+    set env_mode $::env(ENV_MODE)
+    if { [string compare $env_mode "temporary" ] != 0 && [string compare $env_mode "permanent" ] != 0 && [string compare $env_mode "none" ] != 0 } {
+        puts stderr "\[${long_name}\] ENV_MODE has an invalid value. Allowed: temporary, permanent, none"
+        exit 1
+    }
+}
+
+
+# Check if installation exists
+if { ! [file exists ${install_dir}] } {
+    puts stderr "\[${long_name}\] Installation not found!"
+    exit 1
+}
+
+# Check for existance of python executable
+if { ! [file exists ${install_dir}/bin/python3] } {
+    puts stderr "\[${long_name}\] Python binary not found at ${install_dir}/bin/python3. Exiting ..."
+    exit 1
+}
+
+# Set envs_dir depending on ENV_MODE
+switch -- $env_mode {
+    "temporary" {
+        set envs_dir "/srv/environments/${myuser}/venvs"
+    }
+    "permanent" {
+        set envs_dir "${myhome}/venvs"
+    }
+    "none" {
+        unset -nocomplain envs_dir
+        unset -nocomplain env_name
+    }
+}
+
+if { ! [info exists env(ENV_NAME)]} { 
+    # Make the SLURM job ID part of the environment name
+    # if and only if we are in ENV_MODE=temporary
+    # Otherwise, we use "testenv" as the name when ENV_NAME is not provided.
+    if { [info exists env(SLURM_JOBID)] && [string compare $env_mode "temporary" ] == 0 } { 
+        set slurm_jobid $::env(SLURM_JOBID)
+        set env_dir "${envs_dir}/job_${slurm_jobid}"
+        set env_name "job_${slurm_jobid}"
+    } elseif { [string compare $env_mode "none" ] != 0 } {
+        set env_dir "${envs_dir}/testenv"
+        set env_name "testenv"
+    }
+} elseif { [string compare $env_mode "none" ] != 0 } {
+    set env_name [string trimright $::env(ENV_NAME) "/"]
+    set env_dir "${envs_dir}/${env_name}"
+}
+
+
+if { [module-info mode load] } {
+
+    # Temporary environments should be deleted unless KEEP_EXISTING=1
+    # NOTE: KEEP_EXISTING is undocumented for python/* and should currently not be used.
+    if {$env_mode == "temporary" && (![info exists env(KEEP_EXISTING)] || $::env(KEEP_EXISTING) == 0)} {
+        puts stderr "\[${long_name}\] Deleting environment at ${env_dir} if it exists."
+        file delete -force ${env_dir}
+    }
+    
+    switch -- $env_mode {
+        temporary - 
+        permanent {
+            setenv ENV_NAME              "${env_name}"
+        
+            # Only create new environment if ENV_DIR does not yet exist
+            if { ! [file exists ${env_dir}]} {
+                puts stderr "\[${long_name}\] Create NEW virtual environment at ${env_dir}."
+                file mkdir "${env_dir}"
+                puts stderr "\[${long_name}\]      ${install_dir}/bin/python3 -m venv ${env_dir}"
+                exec ${install_dir}/bin/python3 -m venv ${env_dir}
+            } elseif { [file exists "${env_dir}/pyvenv.cfg" ] } {
+            
+                # Check if the python version that we load is consistent with the python
+                # version the venv was created with.
+                set fp [open "${env_dir}/pyvenv.cfg" r]
+                set file_data [read $fp]
+                close $fp
+                
+                if {[regexp -line -- {^version\s*=\s*(\S+)} "${file_data}" match]} {
+                    puts stderr "\[${long_name}\] WARNING: Python version mismatch!"
+                    puts stderr "\[${long_name}\] You are loading an existing venv with another python version than it was created with. This will cause the environment to use the ORIGINAL python version, and NOT the one you specified with module load. I.e., it will use the following python version:"
+                    puts stderr "   VERSION ${match}"
+                } else {
+                    puts stderr "\[${long_name}\] WARNING: Python version of original environment could not be determined. Continuing ..."
+                }
+            }
+            
+            # Activate the environment
+            puts stderr "\[${long_name}\] Activating environment."
+            puts stderr "\[${long_name}\]      source ${env_dir}/bin/activate"
+            puts "source ${env_dir}/bin/activate"
+        }
+        
+        none {
+            prepend-path PATH            "${install_dir}/bin"
+            prepend-path LD_LIBRARY_PATH "${install_dir}/lib"
+        }
+    }
+    
+}
+
+if { [ module-info mode remove ] } {
+
+    # Delete if $env_mode == "temporary" AND NOT KEEP_EXISTING=1
+    set tmp_ke [expr { [info exists env(KEEP_EXISTING)] ? $env(KEEP_EXISTING) : 0 }]
+    set delete_dir [expr { $env_mode == "temporary" && !$tmp_ke && [file exists ${env_dir}] }]
+
+    switch -- $env_mode {
+        temporary - 
+        permanent {
+            setenv ENV_NAME              "${env_name}"
+            puts stderr "\[${long_name}\] Unloading ${long_name}"
+            
+            # Deactivate venv
+            puts stderr "\[${long_name}\]      deactivate"
+            puts "deactivate"
+            
+            if { $delete_dir } {
+                puts stderr "\[${long_name}\] Deleting temporary environment at ${env_dir}."
+                file delete -force ${env_dir}
+            }
+        }
+        
+        none {
+            prepend-path PATH            "${install_dir}/bin"
+            prepend-path LD_LIBRARY_PATH "${install_dir}/lib"
+        }
+    }
+}
+
+# env_dir is internally handled with source bin/activate and deactivate
+#prepend-path PATH            "${install_dir}/bin"
+#prepend-path LD_LIBRARY_PATH "${install_dir}/lib"
+setenv PYTHON_HOME           "${install_dir}"
+setenv ENV_MODE              "${env_mode}"
+

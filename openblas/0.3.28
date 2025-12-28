@@ -1,0 +1,38 @@
+#%Module
+
+set name        "OpenBLAS"
+set version     "0.3.28"
+set long_name   "${name} (${version})"
+set myuser      $::env(USER)
+set myhome      $::env(HOME)
+set root        "/opt/${name}/${version}"
+set shell       [module-info shelltype]
+
+proc ModulesHelp { } {
+    upvar name      name
+    upvar version   version
+    puts stderr "Adds ${name} version ${version} to your environment variables.\n"
+    puts stderr "By default, OPENBLAS_NUM_THREADS=\${SLURM_CPUS_PER_TASK} if"
+    puts stderr "SLURM_CPUS_PER_TASK is defined and you do not set another value"
+    puts stderr "manually (in order to avoid oversubscribing)."
+    puts stderr "You can still set OPENBLAS_NUM_THREADS to any other value manually."
+}
+
+module-whatis "load ${long_name}\n"
+
+prepend-path PATH            "${root}/bin"
+prepend-path LD_LIBRARY_PATH "${root}/lib"
+prepend-path LD_RUN_PATH     "${root}/lib"
+prepend-path CPATH           "${root}/include"
+
+setenv          OPENBLAS_DIR         ${root}
+setenv          OPENBLAS_VERSION     ${version}
+
+# Conditionally set OPENBLAS_NUM_THREADS
+# Fallback is that OpenBLAS detects all available CPUs and uses them.
+if { [info exists env(SLURM_CPUS_PER_TASK)] && ![info exists env(OPENBLAS_NUM_THREADS)] } {
+    setenv OPENBLAS_NUM_THREADS $::env(SLURM_CPUS_PER_TASK)
+}
+if { [info exists env(SLURM_JOB_ID)] && ![info exists env(SLURM_CPUS_PER_TASK)] } {
+    puts stderr "Warning: SLURM_CPUS_PER_TASK is not set, OpenBLAS might use all available CPUs by default."
+}
