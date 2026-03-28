@@ -21,9 +21,11 @@ proc ModulesHelp { } {
 module-whatis "load ${long_name}\n"
 
 prepend-path PATH            "${root}/bin"
+prepend-path LIBRARY_PATH    "${root}/lib"
 prepend-path LD_LIBRARY_PATH "${root}/lib"
 prepend-path LD_RUN_PATH     "${root}/lib"
 prepend-path CPATH           "${root}/include"
+prepend-path PKG_CONFIG_PATH "${root}/lib/pkgconfig"
 
 setenv          OPENBLAS_DIR         ${root}
 setenv          OPENBLAS_VERSION     ${version}
